@@ -536,6 +536,11 @@ fn layout_section(
         .line_height
         .unwrap_or(font_metrics.row_height);
     let extra_letter_spacing = section.format.extra_letter_spacing;
+    let features: Vec<_> = format
+        .font_features
+        .iter()
+        .map(|feature| harfrust::Feature::new(feature.tag, feature.value, ..))
+        .collect();
 
     let mut paragraph = out_paragraphs.last_mut().unwrap();
     if paragraph.glyphs.is_empty() {
@@ -598,7 +603,14 @@ fn layout_section(
                 flags |= harfrust::BufferFlags::END_OF_TEXT;
             }
 
-            let glyph_buffer = shape_text(font_face, run_text, &format.coords, shape_buffer, flags);
+            let glyph_buffer = shape_text(
+                font_face,
+                run_text,
+                &format.coords,
+                &features,
+                shape_buffer,
+                flags,
+            );
 
             layout_shaped_run(
                 fonts,
@@ -1572,6 +1584,7 @@ fn shape_text(
     font_face: &FontFace,
     text: &str,
     coords: &VariationCoords,
+    features: &[harfrust::Feature],
     mut buffer: harfrust::UnicodeBuffer,
     flags: harfrust::BufferFlags,
 ) -> harfrust::GlyphBuffer {
@@ -1601,7 +1614,7 @@ fn shape_text(
     buffer.push_str(text);
     buffer.guess_segment_properties();
 
-    shaper.shape(buffer, harfrust::ShapeOptions::new())
+    shaper.shape(buffer, harfrust::ShapeOptions::new().features(features))
 }
 
 // ----------------------------------------------------------------------------
@@ -1616,6 +1629,57 @@ mod tests {
 
     fn test_fonts() -> FontsImpl {
         FontsImpl::new(TextOptions::default(), FontDefinitions::default())
+    }
+
+    #[test]
+    #[cfg(feature = "default_fonts")]
+    fn opentype_features_select_tabular_figures_per_section() {
+        let format = |tag| TextFormat {
+            font_id: FontId::proportional(24.0),
+            font_features: vec![OpenTypeFeature::new(tag, 1)],
+            ..Default::default()
+        };
+        let mut job = LayoutJob::default();
+        job.append("10", 0.0, format("pnum"));
+        job.append("10", 0.0, format("tnum"));
+        job.append("10", 0.0, format("pnum"));
+
+        // The bundled Ubuntu font supports both proportional and tabular figures.
+        let mut fonts = Fonts::new(TextOptions::default(), FontDefinitions::default());
+        let mut fonts = fonts.with_pixels_per_point(1.0);
+        let galley = fonts.layout_job(job);
+        let glyphs = &galley.rows[0].glyphs;
+        assert_eq!(glyphs.len(), 6);
+        assert_ne!(glyphs[0].advance_width, glyphs[1].advance_width);
+        assert_eq!(glyphs[2].advance_width, glyphs[3].advance_width);
+        assert_eq!(glyphs[0].advance_width, glyphs[4].advance_width);
+        assert_eq!(glyphs[1].advance_width, glyphs[5].advance_width);
+    }
+
+    #[test]
+    #[cfg(feature = "default_fonts")]
+    fn opentype_features_can_disable_ligatures_and_distinguish_cached_layouts() {
+        let job = |font_features| {
+            LayoutJob::simple_format(
+                "fi".to_owned(),
+                TextFormat {
+                    font_id: FontId::proportional(24.0),
+                    font_features,
+                    ..Default::default()
+                },
+            )
+        };
+        let mut fonts = Fonts::new(TextOptions::default(), FontDefinitions::default());
+        let mut fonts = fonts.with_pixels_per_point(1.0);
+        let defaults = fonts.layout_job(job(vec![]));
+        let disabled_job = job(vec![OpenTypeFeature::new("liga", 0)]);
+        let disabled = fonts.layout_job(disabled_job.clone());
+        assert!(!Arc::ptr_eq(&defaults, &disabled));
+        assert!(Arc::ptr_eq(&disabled, &fonts.layout_job(disabled_job)));
+        assert_eq!(defaults.rows[0].glyphs.len(), 2);
+        assert_eq!(disabled.rows[0].glyphs.len(), 2);
+        assert_eq!(defaults.rows[0].glyphs[1].advance_width, 0.0);
+        assert!(disabled.rows[0].glyphs[1].advance_width > 0.0);
     }
 
     fn layout_without_fonts(text: &str, policy: MissingGlyphPolicy) -> Arc<Galley> {

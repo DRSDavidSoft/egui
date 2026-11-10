@@ -1,6 +1,6 @@
 use alloc::{borrow::Cow, sync::Arc};
 use core::fmt::Formatter;
-use epaint::text::{IntoTag, TextFormat, VariationCoords};
+use epaint::text::{IntoTag, OpenTypeFeature, TextFormat, VariationCoords};
 
 use crate::{
     Align, Color32, FontFamily, FontSelection, Galley, Style, TextStyle, TextWrapMode, Ui, Visuals,
@@ -34,6 +34,7 @@ pub struct RichText {
     expand_bg: f32,
     text_color: Option<Color32>,
     coords: VariationCoords,
+    font_features: Vec<OpenTypeFeature>,
     code: bool,
     strong: bool,
     weak: bool,
@@ -56,6 +57,7 @@ impl Default for RichText {
             expand_bg: 1.0,
             text_color: Default::default(),
             coords: Default::default(),
+            font_features: Default::default(),
             code: Default::default(),
             strong: Default::default(),
             weak: Default::default(),
@@ -211,6 +213,28 @@ impl RichText {
         variations: impl IntoIterator<Item = (T, f32)>,
     ) -> Self {
         self.coords = VariationCoords::new(variations);
+        self
+    }
+
+    /// Set the OpenType feature overrides for this text.
+    ///
+    /// Values of zero disable a feature and values of one enable it. Some
+    /// features use other values to select among alternates. The font must
+    /// support the requested features.
+    ///
+    /// ```
+    /// # use egui::RichText;
+    /// let timecode = RichText::new("12:34.567").font_features([("tnum", 1)]);
+    /// ```
+    #[inline]
+    pub fn font_features<T: IntoTag>(
+        mut self,
+        features: impl IntoIterator<Item = (T, u32)>,
+    ) -> Self {
+        self.font_features = features
+            .into_iter()
+            .map(|(tag, value)| OpenTypeFeature::new(tag, value))
+            .collect();
         self
     }
 
@@ -430,6 +454,7 @@ impl RichText {
             expand_bg,
             text_color: _, // already used by `get_text_color`
             coords,
+            font_features,
             code,
             strong: _, // already used by `get_text_color`
             weak: _,   // already used by `get_text_color`
@@ -489,6 +514,7 @@ impl RichText {
                 color: text_color,
                 background: background_color,
                 coords,
+                font_features,
                 italics,
                 underline,
                 strikethrough,
@@ -988,6 +1014,23 @@ mod tests {
         let text = text.color(Color32::BLUE);
         assert_eq!(text.color_override(), Some(Color32::BLUE));
         assert_eq!(text.text(), "Hello");
+    }
+
+    #[test]
+    fn rich_text_carries_opentype_features_into_layout() {
+        let text = RichText::new("12:34").font_features([("tnum", 1), ("liga", 0)]);
+        let job = WidgetText::from(text).into_layout_job(
+            &crate::Style::default(),
+            crate::FontSelection::Default,
+            crate::Align::BOTTOM,
+        );
+        assert_eq!(
+            job.sections[0].format.font_features,
+            [
+                crate::text::OpenTypeFeature::new("tnum", 1),
+                crate::text::OpenTypeFeature::new("liga", 0),
+            ]
+        );
     }
 
     #[test]
