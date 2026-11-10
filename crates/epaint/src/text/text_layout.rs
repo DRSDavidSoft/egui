@@ -2010,7 +2010,6 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "default_fonts")]
     /// Each test rasterizer needs its own [`GlyphRasterizer::key`], or they would replace each other.
     fn unique_test_key() -> String {
         static COUNTER: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
